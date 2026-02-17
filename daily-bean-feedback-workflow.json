@@ -1,0 +1,429 @@
+{
+  "name": "Daily Bean Feedback Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        },
+        "sheetName": "Form Responses 1",
+        "options": {}
+      },
+      "id": "google-sheets-trigger",
+      "name": "Google Sheets Trigger",
+      "type": "n8n-nodes-base.googleSheetsTrigger",
+      "typeVersion": 2,
+      "position": [250, 300],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "your-google-sheets-credential-id",
+          "name": "Google Sheets Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": "gpt-4",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You are a feedback analysis assistant. Analyze the customer feedback and provide:\n1. Sentiment (Positive, Neutral, Negative)\n2. Category (Complaint, Suggestion, Praise, Question, Bug Report)\n3. Priority (High, Medium, Low)\n4. Summary (one sentence)\n5. Key themes/keywords\n\nRespond in JSON format:\n{\n  \"sentiment\": \"...\",\n  \"category\": \"...\",\n  \"priority\": \"...\",\n  \"summary\": \"...\",\n  \"keywords\": [\"...\"]\n}"
+            },
+            {
+              "role": "user",
+              "content": "=Analyze this feedback:\n\nName: {{ $json.Name }}\nFeedback Type: {{ $json['Feedback Type'] }}\nRating: {{ $json.Rating }}\nMessage: {{ $json.Message }}"
+            }
+          ]
+        },
+        "options": {
+          "temperature": 0.3
+        }
+      },
+      "id": "openai-analysis",
+      "name": "AI Feedback Analysis",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [470, 300],
+      "credentials": {
+        "openAiApi": {
+          "id": "your-openai-credential-id",
+          "name": "OpenAI Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "functionCode": "const aiResponse = $input.first().json.choices[0].message.content;\nconst analysis = JSON.parse(aiResponse);\nconst originalData = $('Google Sheets Trigger').first().json;\n\nreturn {\n  json: {\n    ...originalData,\n    ...analysis,\n    processedAt: new Date().toISOString()\n  }\n};"
+      },
+      "id": "parse-ai-response",
+      "name": "Parse AI Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [690, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.priority }}",
+              "rightValue": "High",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            },
+            {
+              "leftValue": "={{ $json.sentiment }}",
+              "rightValue": "Negative",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "or"
+        }
+      },
+      "id": "route-by-priority",
+      "name": "Route by Priority",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [910, 300]
+    },
+    {
+      "parameters": {
+        "channel": "customer-feedback-urgent",
+        "text": "=🚨 *Urgent Feedback Alert*\n\n*Sentiment:* {{ $json.sentiment }}\n*Category:* {{ $json.category }}\n*Priority:* {{ $json.priority }}\n\n*Customer:* {{ $json.Name }}\n*Email:* {{ $json.Email }}\n\n*Summary:* {{ $json.summary }}\n\n*Original Message:*\n{{ $json.Message }}\n\n*Keywords:* {{ $json.keywords.join(', ') }}",
+        "otherOptions": {}
+      },
+      "id": "slack-urgent",
+      "name": "Slack - Urgent Alert",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.1,
+      "position": [1130, 180],
+      "credentials": {
+        "slackApi": {
+          "id": "your-slack-credential-id",
+          "name": "Slack Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fromEmail": "noreply@dailybean.com",
+        "toEmail": "={{ $json.Email }}",
+        "subject": "Thank you for your feedback!",
+        "message": "=Dear {{ $json.Name }},\n\nThank you for taking the time to share your feedback with The Daily Bean. We have received your message and our team will review it shortly.\n\n{{ $json.category === 'Complaint' ? 'We sincerely apologize for any inconvenience. A member of our team will reach out to you within 24 hours to address your concerns.' : '' }}\n\n{{ $json.category === 'Praise' ? 'We are thrilled to hear you had a great experience! Feedback like yours motivates our team to keep delivering excellent service.' : '' }}\n\nYour feedback summary:\n{{ $json.summary }}\n\nBest regards,\nThe Daily Bean Team",
+        "options": {}
+      },
+      "id": "email-customer-urgent",
+      "name": "Email - Customer Response (Urgent)",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [1350, 180],
+      "credentials": {
+        "smtp": {
+          "id": "your-smtp-credential-id",
+          "name": "SMTP Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.category }}",
+              "rightValue": "Praise",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "route-praise",
+      "name": "Is Praise?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1130, 420]
+    },
+    {
+      "parameters": {
+        "channel": "customer-feedback-wins",
+        "text": "=✨ *Great Feedback Received!*\n\n*Customer:* {{ $json.Name }}\n*Rating:* {{ $json.Rating }}/5 ⭐\n\n*Message:*\n{{ $json.Message }}\n\n*Summary:* {{ $json.summary }}\n\nConsider reaching out for a testimonial!",
+        "otherOptions": {}
+      },
+      "id": "slack-praise",
+      "name": "Slack - Positive Feedback",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.1,
+      "position": [1350, 320],
+      "credentials": {
+        "slackApi": {
+          "id": "your-slack-credential-id",
+          "name": "Slack Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.category }}",
+              "rightValue": "Suggestion",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "route-suggestion",
+      "name": "Is Suggestion?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1350, 520]
+    },
+    {
+      "parameters": {
+        "channel": "product-ideas",
+        "text": "=💡 *New Product Suggestion*\n\n*From:* {{ $json.Name }}\n*Category:* {{ $json.category }}\n\n*Summary:* {{ $json.summary }}\n\n*Full Feedback:*\n{{ $json.Message }}\n\n*Keywords:* {{ $json.keywords.join(', ') }}",
+        "otherOptions": {}
+      },
+      "id": "slack-suggestion",
+      "name": "Slack - Product Team",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.1,
+      "position": [1570, 420],
+      "credentials": {
+        "slackApi": {
+          "id": "your-slack-credential-id",
+          "name": "Slack Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fromEmail": "noreply@dailybean.com",
+        "toEmail": "={{ $json.Email }}",
+        "subject": "Thank you for your feedback!",
+        "message": "=Dear {{ $json.Name }},\n\nThank you for sharing your feedback with The Daily Bean. We appreciate you taking the time to help us improve.\n\n{{ $json.category === 'Suggestion' ? 'Your suggestion has been forwarded to our product team for consideration.' : '' }}\n\n{{ $json.category === 'Question' ? 'We have received your question and someone from our team will get back to you soon.' : '' }}\n\nYour feedback summary:\n{{ $json.summary }}\n\nBest regards,\nThe Daily Bean Team",
+        "options": {}
+      },
+      "id": "email-customer-normal",
+      "name": "Email - Customer Response (Normal)",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [1570, 620],
+      "credentials": {
+        "smtp": {
+          "id": "your-smtp-credential-id",
+          "name": "SMTP Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "sheetName": "Processed Feedback",
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "google-sheets-log",
+      "name": "Log to Processed Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.4,
+      "position": [1790, 300],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "your-google-sheets-credential-id",
+          "name": "Google Sheets Account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Google Sheets Trigger": {
+      "main": [
+        [
+          {
+            "node": "AI Feedback Analysis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Feedback Analysis": {
+      "main": [
+        [
+          {
+            "node": "Parse AI Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse AI Response": {
+      "main": [
+        [
+          {
+            "node": "Route by Priority",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route by Priority": {
+      "main": [
+        [
+          {
+            "node": "Slack - Urgent Alert",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Is Praise?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Slack - Urgent Alert": {
+      "main": [
+        [
+          {
+            "node": "Email - Customer Response (Urgent)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email - Customer Response (Urgent)": {
+      "main": [
+        [
+          {
+            "node": "Log to Processed Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Praise?": {
+      "main": [
+        [
+          {
+            "node": "Slack - Positive Feedback",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Is Suggestion?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Slack - Positive Feedback": {
+      "main": [
+        [
+          {
+            "node": "Email - Customer Response (Normal)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Suggestion?": {
+      "main": [
+        [
+          {
+            "node": "Slack - Product Team",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Email - Customer Response (Normal)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Slack - Product Team": {
+      "main": [
+        [
+          {
+            "node": "Email - Customer Response (Normal)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email - Customer Response (Normal)": {
+      "main": [
+        [
+          {
+            "node": "Log to Processed Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "createdAt": "2026-02-17T13:00:00.000Z",
+      "updatedAt": "2026-02-17T13:00:00.000Z",
+      "id": "feedback-automation",
+      "name": "Feedback Automation"
+    }
+  ],
+  "triggerCount": 1,
+  "updatedAt": "2026-02-17T13:00:00.000Z",
+  "versionId": "1"
+}
